@@ -1,0 +1,29 @@
+[[source]]
+url = "https://pypi.org/simple"
+verify_ssl = true
+name = "pypi"
+
+[packages]
+pytesseract = "*"
+pdf2image = "*"
+nltk = "*"
+pandas = "*"
+unidecode = "*"
+pillow = "*"
+trnlp = "*"
+pypdf2 = "*"
+langchain = "*"
+faiss-cpu = "*"
+sentence-transformers = "*"
+pdfplumber = "*"
+chardet = "*"
+pymupdf = "*"
+regex = "*"
+streamlit = "*"
+plotly = "*"
+langchain-community = "*"
+
+[dev-packages]
+
+[requires]
+python_version = "3.11"
