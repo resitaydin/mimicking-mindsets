@@ -1,2 +1,20 @@
+# Python bytecode
+__pycache__/
+*.pyc
+
+# Virtual environment directories
+.venv/
+env/
+
+# IDE configuration files
+.vscode/
+.idea/
+
+# Environment variable file
+.env
+
+# Output files
 output/
+
+# Big files/data
 works/

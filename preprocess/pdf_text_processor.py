@@ -162,7 +162,18 @@ class PDFTextProcessor:
         Create FAISS vector store from processed text chunks
         """
         texts = df['text'].tolist()
-        metadatas = df.drop('text', axis=1).to_dict('records')
+        
+        # Modify metadata to include source field
+        metadatas = []
+        for _, row in df.iterrows():
+            metadata = {
+                'source': row['filename'],  # Add source field
+                'chunk_id': row['chunk_id'],
+                'title': row['title'],
+                'creation_date': row['creation_date'],
+                'num_pages': row['num_pages']
+            }
+            metadatas.append(metadata)
         
         vector_store = FAISS.from_texts(
             texts=texts,
@@ -170,9 +181,7 @@ class PDFTextProcessor:
             metadatas=metadatas
         )
         
-        # Save the vector store
         vector_store.save_local(os.path.join(self.output_directory, "vector_store"))
-        
         return vector_store
     
     def save_processed_data(self, df: pd.DataFrame):
