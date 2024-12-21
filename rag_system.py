@@ -159,7 +159,6 @@ class ErolGungorRAG:
                     "error_type": type(e).__name__
                 }
             }
-
 # Usage Example
 if __name__ == "__main__":
     rag = ErolGungorRAG()
