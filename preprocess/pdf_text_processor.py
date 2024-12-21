@@ -1,34 +1,62 @@
 import os
 import re
-import pandas as pd
-from typing import List, Dict
+import chromadb
+from typing import List, Dict, Optional
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_community.vectorstores import FAISS
 from langchain_community.embeddings import HuggingFaceEmbeddings
 import pdfplumber
 import regex
+from chromadb.config import Settings
+import chromadb.utils.embedding_functions as embedding_functions
 
 class PDFTextProcessor:
-    def __init__(self, pdf_directory: str, output_directory: str, embedding_model_name: str = "emrecan/bert-base-turkish-cased-mean-nli-stsb-tr"):
+    def __init__(
+        self, 
+        pdf_directory: str, 
+        output_directory: str, 
+        embedding_model_name: str = "emrecan/bert-base-turkish-cased-mean-nli-stsb-tr",
+        collection_name: str = "erol_gungor_docs"
+    ):
         """
-        Initialize PDF preprocessor with input and output directories
+        Initialize PDF preprocessor with ChromaDB integration using consistent embedding model
         """
         self.pdf_directory = pdf_directory
         self.output_directory = output_directory
         self.embedding_model_name = embedding_model_name
+        self.collection_name = collection_name
+        
+        # Initialize embeddings with the Turkish BERT model
         self.embeddings = HuggingFaceEmbeddings(
             model_name=embedding_model_name,
             model_kwargs={'device': 'cpu'},
-            encode_kwargs={'normalize_embeddings': True},
-            show_progress=True
+            encode_kwargs={'normalize_embeddings': True}
         )
         
+        # Initialize ChromaDB
+        self.chroma_client = chromadb.PersistentClient(
+            path=os.path.join(output_directory, "chromadb"),
+            settings=Settings(anonymized_telemetry=False)
+        )
+        
+        sentence_transformer_ef = embedding_functions.SentenceTransformerEmbeddingFunction(
+            model_name="emrecan/bert-base-turkish-cased-mean-nli-stsb-tr"
+        )
+        
+        # Create or get collection with the Turkish model embeddings
+        self.collection = self.chroma_client.get_or_create_collection(
+            name=collection_name,
+            metadata={
+                "hnsw:space": "cosine",
+                "dimension": 768
+            },
+            embedding_function=sentence_transformer_ef
+        )   
         # Create output directory if it doesn't exist
         os.makedirs(output_directory, exist_ok=True)
     
     def extract_text_from_pdf(self, pdf_path: str) -> Dict[str, str]:
         """
-        Extract text from PDF using pdfplumber with proper encoding
+        Extract text and metadata from PDF using pdfplumber
         """
         try:
             with pdfplumber.open(pdf_path) as pdf:
@@ -40,70 +68,63 @@ class PDFTextProcessor:
                 
                 text = " ".join(text_parts)
                 
-                # Get basic metadata
+                # Extract more detailed metadata
                 metadata = {
                     "title": os.path.basename(pdf_path),
-                    "creation_date": "Unknown",
-                    "num_pages": len(pdf.pages)
+                    "creation_date": pdf.metadata.get('CreationDate', 'Unknown'),
+                    "author": pdf.metadata.get('Author', 'Unknown'),
+                    "num_pages": len(pdf.pages),
+                    "producer": pdf.metadata.get('Producer', 'Unknown')
                 }
                 
-                return {
-                    "text": text,
-                    "title": metadata["title"],
-                    "creation_date": metadata["creation_date"],
-                    "num_pages": metadata["num_pages"]
-                }
+                return {**metadata, "text": text}
         except Exception as e:
             print(f"Text extraction failed for {pdf_path}: {e}")
             return {
                 "text": "",
                 "title": os.path.basename(pdf_path),
                 "creation_date": "Unknown",
-                "num_pages": 0
+                "author": "Unknown",
+                "num_pages": 0,
+                "producer": "Unknown"
             }
 
     def clean_text(self, text: str) -> str:
         """
-        Clean text while preserving case and Turkish characters
+        Clean text while preserving Turkish characters and essential formatting
         """
         # Remove hyphenated line breaks
         text = text.replace('-\n', '').replace('-', '')
         
-        # Remove special characters while preserving Turkish letters, numbers, and basic punctuation
+        # Remove special characters while preserving Turkish letters
         text = regex.sub(r'[^\p{L}\p{N}\s.,!?;:\-\'"\(\)]+', '', text)
         
-        # Remove extra whitespaces
+        # Normalize whitespace
         text = re.sub(r'\s+', ' ', text).strip()
-        
-        # No need to convert to lowercase as we are using a case-sensitive model.
         
         return text
     
-    def create_text_chunks(self, text: str, chunk_size: int = 500, chunk_overlap: int = 100) -> List[str]:
+    def create_text_chunks(
+        self, 
+        text: str, 
+        chunk_size: int = 500, 
+        chunk_overlap: int = 100
+    ) -> List[str]:
         """
-        Create text chunks using LangChain's RecursiveCharacterTextSplitter
-        
-        Parameters:
-            text (str): The text to split into chunks
-            chunk_size (int): Size of each chunk in characters (default: 500)
-            chunk_overlap (int): Number of characters to overlap between chunks (default: 100)
-        
-        Returns:
-            List[str]: List of text chunks
+        Create semantic text chunks using improved splitting strategy
         """
         text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
             length_function=len,
-            # Ordered from most to least preferred split characters
             separators=[
                 "\n\n",  # Paragraphs
                 "\n",    # Line breaks
                 ".",     # Sentences
                 "!",     # Exclamations
                 "?",     # Questions
-                ";",     # Semi-colons (adding this)
-                ":",     # Colons (adding this)
+                ";",     # Semi-colons
+                ":",     # Colons
                 ",",     # Commas
                 " ",     # Words
                 ""       # Characters
@@ -112,11 +133,14 @@ class PDFTextProcessor:
         
         return text_splitter.split_text(text)
     
-    def process_pdfs(self, chunk_size: int = 500, chunk_overlap: int = 100) -> pd.DataFrame:
+    def process_pdfs(
+        self, 
+        chunk_size: int = 500, 
+        chunk_overlap: int = 100
+    ) -> None:
         """
-        Process all PDFs in the directory
+        Process PDFs and store in ChromaDB with improved metadata
         """
-        processed_data = []
         pdf_files = [f for f in os.listdir(self.pdf_directory) if f.endswith('.pdf')]
         total_pdfs = len(pdf_files)
         
@@ -127,90 +151,41 @@ class PDFTextProcessor:
             pdf_path = os.path.join(self.pdf_directory, filename)
             
             # Extract text and metadata
-            print("- Extracting text...")
+            print("- Extracting text and metadata...")
             pdf_data = self.extract_text_from_pdf(pdf_path)
             
             # Clean text
             print("- Cleaning text...")
-            cleaned_text = self.clean_text(pdf_data["text"])
+            cleaned_text = self.clean_text(pdf_data.pop("text"))
             
-            # Chunk text
+            # Create chunks
             print("- Creating chunks...")
             text_chunks = self.create_text_chunks(cleaned_text, chunk_size, chunk_overlap)
             print(f"  Created {len(text_chunks)} chunks")
             
-            # Create metadata for each chunk
-            print("- Adding metadata...")
-            for i, chunk in enumerate(text_chunks):
-                processed_data.append({
-                    'filename': filename,
-                    'chunk_id': i,
-                    'text': chunk,
-                    'length': len(chunk),
-                    'title': pdf_data["title"],
-                    'creation_date': pdf_data["creation_date"],
-                    'num_pages': pdf_data["num_pages"]
-                })
+            # Prepare documents for ChromaDB
+            ids = [f"{filename}_{i}" for i in range(len(text_chunks))]
+            metadatas = [{
+                **pdf_data,
+                "chunk_id": i,
+                "source_file": filename,
+            } for i in range(len(text_chunks))]
+            
+            # Add to ChromaDB
+            print("- Adding to ChromaDB...")
+            self.collection.add(
+                documents=text_chunks,
+                ids=ids,
+                metadatas=metadatas
+            )
         
-        print("\nAll PDFs processed successfully!")
-        print(f"Total chunks created: {len(processed_data)}")
-        
-        return pd.DataFrame(processed_data)
-    
-    def create_vector_store(self, df: pd.DataFrame) -> FAISS:
-        """
-        Create FAISS vector store from processed text chunks
-        """
-        texts = df['text'].tolist()
-        
-        # Modify metadata to include source field
-        metadatas = []
-        for _, row in df.iterrows():
-            metadata = {
-                'source': row['filename'],  # Add source field
-                'chunk_id': row['chunk_id'],
-                'title': row['title'],
-                'creation_date': row['creation_date'],
-                'num_pages': row['num_pages']
-            }
-            metadatas.append(metadata)
-        
-        vector_store = FAISS.from_texts(
-            texts=texts,
-            embedding=self.embeddings,
-            metadatas=metadatas
-        )
-        
-        vector_store.save_local(os.path.join(self.output_directory, "vector_store"))
-        return vector_store
-    
-    def save_processed_data(self, df: pd.DataFrame):
-        """
-        Save processed data to CSV and create vector store
-        """
-        print("\nSaving processed data...")
-        
-        # Save consolidated CSV
-        csv_path = os.path.join(self.output_directory, 'processed_texts.csv')
-        df.to_csv(csv_path, index=False, encoding='utf-8')
-        print(f"- Saved CSV to: {csv_path}")
-        
-        # Create and save vector store
-        print("- Creating vector store...")
-        vector_store = self.create_vector_store(df)
-        vector_store_path = os.path.join(self.output_directory, "vector_store")
-        print(f"- Saved vector store to: {vector_store_path}")
-        
-        return vector_store
+        print("\nAll PDFs processed and stored in ChromaDB!")
+        print(f"Total chunks stored: {self.collection.count()}")
 
 # Usage Example
 if __name__ == "__main__":
     preprocessor = PDFTextProcessor(
-        pdf_directory='works', 
+        pdf_directory='erol_gungor_docs', 
         output_directory='output'
     )
-    
-    processed_df = preprocessor.process_pdfs(chunk_size=500, chunk_overlap=100)
-    vector_store = preprocessor.save_processed_data(processed_df)
-    
-    print("PDF Processing Complete!")
+    preprocessor.process_pdfs(chunk_size=500, chunk_overlap=100)
