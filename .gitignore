@@ -13,8 +13,8 @@ env/
 # Environment variable file
 .env
 
-# Output files
-output/
-
 # Big files/data
-erol_gungor_docs/
+data/erol_gungor_docs
+
+# picture
+erol_gungor.jpg

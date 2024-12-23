@@ -14,7 +14,6 @@ trnlp = "*"
 pypdf2 = "*"
 langchain = "*"
 faiss-cpu = "*"
-sentence-transformers = "*"
 pdfplumber = "*"
 chardet = "*"
 pymupdf = "*"
@@ -23,6 +22,9 @@ streamlit = "*"
 plotly = "*"
 langchain-community = "*"
 chromadb = "*"
+ragas = "*"
+sentence-transformers = "*"
+bert-score = "*"
 
 [dev-packages]
 
